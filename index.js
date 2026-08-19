@@ -9,6 +9,7 @@ import fs from 'fs';
 const dbFile = './database.json';
 const pedidosTemp = new Map(); 
 
+// AQUÍ PONES EL ID DEL ROL ADMIN (Esto servirá para que el bot te etiquete en las alertas)
 const rolesPermitidos = ['AQUÍ_PEGA_TU_ID']; 
 
 function esAdmin(interaction) {
@@ -20,9 +21,10 @@ function esAdmin(interaction) {
 }
 
 function leerBaseDeDatos() {
-    if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, JSON.stringify({ proyectos: {} }));
+    if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, JSON.stringify({ proyectos: {}, asignaciones: [] }));
     const data = JSON.parse(fs.readFileSync(dbFile));
     if (!data.proyectos) data.proyectos = {};
+    if (!data.asignaciones) data.asignaciones = []; // NUEVA LISTA DE VIGILANCIA
     
     for (const key in data.proyectos) {
         if (!data.proyectos[key].stats) {
@@ -121,6 +123,32 @@ client.once('clientReady', async () => {
     } catch (error) { 
         console.error('Error registrando comandos:', error); 
     }
+
+    // NUEVO: SISTEMA DE VIGILANCIA DE TIEMPOS
+    setInterval(async () => {
+        const db = leerBaseDeDatos();
+        let huboCambios = false;
+        const ahora = Date.now();
+
+        for (let asig of db.asignaciones) {
+            if (ahora > asig.vencimiento && !asig.avisado) {
+                asig.avisado = true;
+                huboCambios = true;
+
+                const canal = await client.channels.fetch(asig.canalId).catch(() => null);
+                if (canal) {
+                    const tagAdmin = rolesPermitidos[0] !== 'AQUÍ_PEGA_TU_ID' ? `<@&${rolesPermitidos[0]}>` : 'Admin';
+                    const alertaVencimiento = new EmbedBuilder()
+                        .setColor('#e74c3c')
+                        .setTitle('⏰ ¡Plazo Vencido!')
+                        .setDescription(`El tiempo de <@${asig.userId}> para entregar el **Capítulo ${asig.capitulo}** (${asig.rol}) de **${asig.proyecto}** se ha agotado.`);
+                    
+                    await canal.send({ content: `${tagAdmin} - Posible demora detectada:`, embeds: [alertaVencimiento] });
+                }
+            }
+        }
+        if (huboCambios) guardarBaseDeDatos(db);
+    }, 5 * 60 * 1000); // Revisa cada 5 minutos
 });
 
 client.on('interactionCreate', async interaction => {
@@ -178,6 +206,12 @@ client.on('interactionCreate', async interaction => {
                     }
                     db.proyectos[nuevoNombre] = proyectoTarget;
                     delete db.proyectos[nombreActual];
+                    
+                    // Actualizar las asignaciones para que coincidan con el nuevo nombre
+                    db.asignaciones.forEach(asig => {
+                        if (asig.proyecto === nombreActual) asig.proyecto = nuevoNombre;
+                    });
+                    
                     nombreFinal = nuevoNombre;
                 }
 
@@ -378,7 +412,7 @@ client.on('interactionCreate', async interaction => {
                 if (!esCanalDeProyecto) return interaction.reply({ content: '⚠️ Usa este comando en el canal del proyecto.', flags: MessageFlags.Ephemeral });
                 
                 const menuRol = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('menu_roles').setPlaceholder('Selecciona el Rol ——').addOptions([{ label: '🖌️ Clean', value: 'Clean' }, { label: '📝 Traducción', value: 'Traducción' }, { label: '🌸 Typeset', value: 'Typeset' }]));
-                const menuTiempo = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('menu_tiempo').setPlaceholder('Tiempo estimado ——').addOptions([{ label: '💖 Inmediata', value: 'Inmediata' }, { label: '🍂 12 Horas', value: '12 Horas' }, { label: '🌿 3 Días', value: '3 Días' }]));
+                const menuTiempo = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('menu_tiempo').setPlaceholder('Tiempo estimado ——').addOptions([{ label: '💖 Inmediata (2 Horas)', value: 'Inmediata' }, { label: '🍂 12 Horas', value: '12 Horas' }, { label: '🌿 3 Días', value: '3 Días' }]));
                 
                 const botonConfirmar = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirmar_pedido').setLabel('Confirmar ⋆').setStyle(ButtonStyle.Secondary));
                 const panelEmbed = new EmbedBuilder().setColor('#2c3e50').setTitle('⋆ Panel Zumito 🍇 ✧').setDescription('Selecciona tus preferencias y solicita tu capítulo.');
@@ -405,6 +439,11 @@ client.on('interactionCreate', async interaction => {
                     db.proyectos[proyecto].stats[rol].proceso = 0;
                 }
                 db.proyectos[proyecto].stats[rol].revisar += cantidad;
+
+                // NUEVO: DESACTIVAR LA ALARMA AL REGISTRAR
+                const rolesConvertidos = { 'Clean': 'clean', 'Traducción': 'tradu', 'Typeset': 'type' };
+                db.asignaciones = db.asignaciones.filter(a => !(a.userId === userId && a.proyecto === proyecto && rolesConvertidos[a.rol] === rol));
+
                 guardarBaseDeDatos(db);
 
                 const botones = new ActionRowBuilder().addComponents(
@@ -507,7 +546,7 @@ client.on('interactionCreate', async interaction => {
                 if (!esAdmin(interaction)) return;
                 const db = leerBaseDeDatos();
                 for (const userId in db) {
-                    if (userId !== 'proyectos') {
+                    if (userId !== 'proyectos' && userId !== 'asignaciones') {
                         db[userId].clean = 0;
                         db[userId].tradu = 0;
                         db[userId].type = 0;
@@ -557,6 +596,21 @@ client.on('interactionCreate', async interaction => {
                 proyectoActual.stats[rolKey].proceso++;
 
                 const capAsignado = proyectoActual.capitulosDisponibles.shift();
+                
+                // NUEVO: CREAR EL REGISTRO DE ALARMA
+                const calculoHoras = { 'Inmediata': 2, '12 Horas': 12, '3 Días': 72 };
+                const horasAñadidas = calculoHoras[datosUsuario.tiempo] || 12;
+                
+                db.asignaciones.push({
+                    userId: userId,
+                    proyecto: nombreProyectoActual,
+                    capitulo: capAsignado,
+                    rol: datosUsuario.rol,
+                    canalId: interaction.channelId,
+                    vencimiento: Date.now() + (horasAñadidas * 60 * 60 * 1000),
+                    avisado: false
+                });
+
                 guardarBaseDeDatos(db);
 
                 const canalDelProyecto = await client.channels.fetch(interaction.channelId).catch(() => null);
