@@ -615,7 +615,7 @@ client.on('interactionCreate', async interaction => {
 
                 const canalDelProyecto = await client.channels.fetch(interaction.channelId).catch(() => null);
                 if (canalDelProyecto) {
-                    const alertaPublica = new EmbedBuilder().setColor('#3498db').setTitle('📢 Asignación Tomada').setDescription(`El usuario <@${userId}> tomó el **Capítulo ${capAsignado}** de ${nombreProyectoActual}.\n\n**Rol:** ${datosUsuario.rol}`);
+                   const alertaPublica = new EmbedBuilder().setColor('#3498db').setTitle('📢 Asignación Tomada').setDescription(`El usuario <@${userId}> tomó el **Capítulo ${capAsignado}** de ${nombreProyectoActual}.\n\n**Rol:** ${datosUsuario.rol}\n**Tiempo:** ${datosUsuario.tiempo}`);
                     await canalDelProyecto.send({ embeds: [alertaPublica] });
                 }
 
