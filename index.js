@@ -24,7 +24,7 @@ function leerBaseDeDatos() {
     if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, JSON.stringify({ proyectos: {}, asignaciones: [] }));
     const data = JSON.parse(fs.readFileSync(dbFile));
     if (!data.proyectos) data.proyectos = {};
-    if (!data.asignaciones) data.asignaciones = []; // NUEVA LISTA DE VIGILANCIA
+    if (!data.asignaciones) data.asignaciones = []; 
     
     for (const key in data.proyectos) {
         if (!data.proyectos[key].stats) {
@@ -91,6 +91,15 @@ client.once('clientReady', async () => {
                 ]
             },
             { name: 'agregar_caps', description: '[Admin] Agregar caps mediante lista' },
+            // NUEVO COMANDO: Eliminar Caps
+            { 
+                name: 'eliminar_caps', 
+                description: '[Admin] Elimina capítulos específicos del stock de un proyecto', 
+                options: [
+                    { name: 'proyecto', description: 'Selecciona el proyecto', type: ApplicationCommandOptionType.String, required: true, autocomplete: true },
+                    { name: 'capitulos', description: 'Separados por comas (Ej: 15, 16)', type: ApplicationCommandOptionType.String, required: true }
+                ]
+            },
             { name: 'eliminar_proyecto', description: '[Admin] Elimina un proyecto del inventario' },
             { name: 'ranking', description: 'Muestra la tabla de posiciones del staff' },
             { name: 'registrar_correo', description: 'Vincula tu correo de Gmail para obtener accesos de trabajo', options: [{ name: 'correo', description: 'Tu dirección de correo electrónico', type: ApplicationCommandOptionType.String, required: true }] },
@@ -124,7 +133,6 @@ client.once('clientReady', async () => {
         console.error('Error registrando comandos:', error); 
     }
 
-    // NUEVO: SISTEMA DE VIGILANCIA DE TIEMPOS
     setInterval(async () => {
         const db = leerBaseDeDatos();
         let huboCambios = false;
@@ -148,14 +156,15 @@ client.once('clientReady', async () => {
             }
         }
         if (huboCambios) guardarBaseDeDatos(db);
-    }, 5 * 60 * 1000); // Revisa cada 5 minutos
+    }, 5 * 60 * 1000); 
 });
 
 client.on('interactionCreate', async interaction => {
     
     try {
         if (interaction.isAutocomplete()) {
-            if (interaction.commandName === 'registrar' || interaction.commandName === 'publicar' || interaction.commandName === 'editar_proyecto') {
+            // Actualizado para incluir el autocompletado en el comando eliminar_caps
+            if (interaction.commandName === 'registrar' || interaction.commandName === 'publicar' || interaction.commandName === 'editar_proyecto' || interaction.commandName === 'eliminar_caps') {
                 const focusedValue = interaction.options.getFocused();
                 const db = leerBaseDeDatos();
                 const proyectos = Object.keys(db.proyectos);
@@ -166,6 +175,41 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.isChatInputCommand()) {
+            
+            // LÓGICA DEL NUEVO COMANDO
+            if (interaction.commandName === 'eliminar_caps') {
+                if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins de proyectos.', flags: MessageFlags.Ephemeral });
+
+                const proyecto = interaction.options.getString('proyecto');
+                const capitulos = interaction.options.getString('capitulos');
+                const db = leerBaseDeDatos();
+
+                if (!db.proyectos[proyecto]) {
+                    return interaction.reply({ content: '⚠️ Proyecto no encontrado en la base de datos.', flags: MessageFlags.Ephemeral });
+                }
+
+                const capsAEliminar = capitulos.split(',').map(c => c.trim()).filter(c => c !== '');
+                if (capsAEliminar.length === 0) return interaction.reply({ content: '❌ Por favor, ingresa al menos un capítulo válido.', flags: MessageFlags.Ephemeral });
+
+                const capsAntes = db.proyectos[proyecto].capitulosDisponibles.length;
+                
+                // Filtramos dejando solo los capítulos que NO están en la lista de eliminación
+                db.proyectos[proyecto].capitulosDisponibles = db.proyectos[proyecto].capitulosDisponibles.filter(cap => !capsAEliminar.includes(cap));
+                
+                const eliminadosCount = capsAntes - db.proyectos[proyecto].capitulosDisponibles.length;
+
+                if (eliminadosCount > 0) {
+                    // Restar de las estadísticas asegurando que no queden números negativos
+                    db.proyectos[proyecto].stats.clean.libres = Math.max(0, db.proyectos[proyecto].stats.clean.libres - eliminadosCount);
+                    db.proyectos[proyecto].stats.tradu.libres = Math.max(0, db.proyectos[proyecto].stats.tradu.libres - eliminadosCount);
+                    db.proyectos[proyecto].stats.type.bloqueados = Math.max(0, db.proyectos[proyecto].stats.type.bloqueados - eliminadosCount);
+                    
+                    guardarBaseDeDatos(db);
+                    await interaction.reply({ content: `✅ Se han eliminado **${eliminadosCount}** capítulo(s) del stock disponible de **${proyecto}**.`, flags: MessageFlags.Ephemeral });
+                } else {
+                    await interaction.reply({ content: `⚠️ Ninguno de esos capítulos se encontraba libre en el stock de **${proyecto}**.`, flags: MessageFlags.Ephemeral });
+                }
+            }
 
             if (interaction.commandName === 'editar_proyecto') {
                 if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins de proyectos.', flags: MessageFlags.Ephemeral });
@@ -207,7 +251,6 @@ client.on('interactionCreate', async interaction => {
                     db.proyectos[nuevoNombre] = proyectoTarget;
                     delete db.proyectos[nombreActual];
                     
-                    // Actualizar las asignaciones para que coincidan con el nuevo nombre
                     db.asignaciones.forEach(asig => {
                         if (asig.proyecto === nombreActual) asig.proyecto = nuevoNombre;
                     });
@@ -292,7 +335,7 @@ client.on('interactionCreate', async interaction => {
                     if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo administradores.', flags: MessageFlags.Ephemeral });
                     infoEmbed.setTitle('👑 Guía de Zumito para Administradores')
                         .setColor('#e67e22')
-                        .setDescription('**`/crear_proyecto`** y **`/editar_proyecto`**\n↳ Administra obras, enlaces web, Drive y estética.\n\n**`/agregar_caps`**\n↳ Añade stock de capítulos.\n\n**`/publicar`**\n↳ Envía anuncios públicos como Actualización, Estreno o Finalizado con imagen integrada.\n\n**`/reporte`**\n↳ Panel de progreso invisible.');
+                        .setDescription('**`/crear_proyecto`** y **`/editar_proyecto`**\n↳ Administra obras, enlaces web, Drive y estética.\n\n**`/agregar_caps`** y **`/eliminar_caps`**\n↳ Controla el stock de capítulos disponibles.\n\n**`/publicar`**\n↳ Envía anuncios públicos como Actualización, Estreno o Finalizado.\n\n**`/reporte`**\n↳ Panel de progreso invisible.');
                 }
                 await interaction.reply({ embeds: [infoEmbed], flags: MessageFlags.Ephemeral });
             }
@@ -440,7 +483,6 @@ client.on('interactionCreate', async interaction => {
                 }
                 db.proyectos[proyecto].stats[rol].revisar += cantidad;
 
-                // NUEVO: DESACTIVAR LA ALARMA AL REGISTRAR
                 const rolesConvertidos = { 'Clean': 'clean', 'Traducción': 'tradu', 'Typeset': 'type' };
                 db.asignaciones = db.asignaciones.filter(a => !(a.userId === userId && a.proyecto === proyecto && rolesConvertidos[a.rol] === rol));
 
@@ -597,7 +639,6 @@ client.on('interactionCreate', async interaction => {
 
                 const capAsignado = proyectoActual.capitulosDisponibles.shift();
                 
-                // NUEVO: CREAR EL REGISTRO DE ALARMA
                 const calculoHoras = { 'Inmediata': 2, '12 Horas': 12, '3 Días': 72 };
                 const horasAñadidas = calculoHoras[datosUsuario.tiempo] || 12;
                 
