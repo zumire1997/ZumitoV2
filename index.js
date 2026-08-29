@@ -91,7 +91,6 @@ client.once('clientReady', async () => {
                 ]
             },
             { name: 'agregar_caps', description: '[Admin] Agregar caps mediante lista' },
-            // NUEVO COMANDO: Eliminar Caps
             { 
                 name: 'eliminar_caps', 
                 description: '[Admin] Elimina capítulos específicos del stock de un proyecto', 
@@ -101,11 +100,15 @@ client.once('clientReady', async () => {
                 ]
             },
             { name: 'eliminar_proyecto', description: '[Admin] Elimina un proyecto del inventario' },
+            // NUEVO COMANDO: Lista de proyectos tipo ficha
+            { name: 'lista_proyectos', description: '[Admin] Muestra una lista de todos los proyectos creados tipo ficha' },
             { name: 'ranking', description: 'Muestra la tabla de posiciones del staff' },
             { name: 'registrar_correo', description: 'Vincula tu correo de Gmail para obtener accesos de trabajo', options: [{ name: 'correo', description: 'Tu dirección de correo electrónico', type: ApplicationCommandOptionType.String, required: true }] },
             { name: 'lista_correos', description: '[Admin] Muestra el directorio de correos del staff' },
             { name: 'reporte', description: '[Admin] Muestra el panel de progreso de forma invisible' },
             { name: 'reiniciar_mes', description: '[Admin] Reinicia los puntos de todos a cero para empezar un nuevo mes' },
+            // NUEVO COMANDO: Reiniciar Reportes
+            { name: 'reiniciar_reportes', description: '[Admin] Restablece a 0 todas las estadísticas de los reportes de los proyectos' },
             {
                 name: 'info',
                 description: 'Muestra la guía de uso de los comandos de Zumito',
@@ -163,7 +166,6 @@ client.on('interactionCreate', async interaction => {
     
     try {
         if (interaction.isAutocomplete()) {
-            // Actualizado para incluir el autocompletado en el comando eliminar_caps
             if (interaction.commandName === 'registrar' || interaction.commandName === 'publicar' || interaction.commandName === 'editar_proyecto' || interaction.commandName === 'eliminar_caps') {
                 const focusedValue = interaction.options.getFocused();
                 const db = leerBaseDeDatos();
@@ -176,7 +178,53 @@ client.on('interactionCreate', async interaction => {
 
         if (interaction.isChatInputCommand()) {
             
-            // LÓGICA DEL NUEVO COMANDO
+            // NUEVO COMANDO: Lista de proyectos
+            if (interaction.commandName === 'lista_proyectos') {
+                if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins de proyectos.', flags: MessageFlags.Ephemeral });
+                
+                const db = leerBaseDeDatos();
+                const proyectos = Object.entries(db.proyectos);
+                
+                if (proyectos.length === 0) return interaction.reply({ content: '📭 No hay proyectos registrados en la base de datos.', flags: MessageFlags.Ephemeral });
+
+                const embeds = [];
+                let currentEmbed = new EmbedBuilder().setColor('#9b59b6').setTitle('📚 Inventario de Proyectos');
+                
+                proyectos.forEach(([nombre, datos], index) => {
+                    if (index > 0 && index % 25 === 0) {
+                        embeds.push(currentEmbed);
+                        currentEmbed = new EmbedBuilder().setColor('#9b59b6');
+                    }
+                    const linkDrive = datos.enlace_drive?.startsWith('http') ? `[Carpeta](${datos.enlace_drive})` : 'N/A';
+                    const linkWeb = datos.enlace_web?.startsWith('http') ? `[Web](${datos.enlace_web})` : 'N/A';
+                    
+                    currentEmbed.addFields({
+                        name: `🔺 ${nombre}`,
+                        value: `**Canal:** <#${datos.canalId}>\n**Drive:** ${linkDrive} | **Web:** ${linkWeb}\n**Stock de capítulos:** ${datos.capitulosDisponibles.length} cap(s)`,
+                        inline: true
+                    });
+                });
+                embeds.push(currentEmbed);
+
+                await interaction.reply({ embeds: embeds, flags: MessageFlags.Ephemeral });
+            }
+
+            // NUEVO COMANDO: Reiniciar Reportes
+            if (interaction.commandName === 'reiniciar_reportes') {
+                if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins de proyectos.', flags: MessageFlags.Ephemeral });
+
+                const botonesConfirmacion = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('confirmar_reinicio_reportes').setLabel('Sí, reiniciar reportes a 0').setStyle(ButtonStyle.Danger),
+                    new ButtonBuilder().setCustomId('cancelar_reinicio_reportes').setLabel('Cancelar').setStyle(ButtonStyle.Secondary)
+                );
+
+                await interaction.reply({ 
+                    content: '⚠️ **ADVERTENCIA:** ¿Estás segura de que quieres restablecer a 0 **todos los reportes** (libres, en proceso, aprobados, bloqueados) de **todos** los proyectos de la base de datos?\n*(Esto también limpiará cualquier capítulo sobrante en el stock).*', 
+                    components: [botonesConfirmacion], 
+                    flags: MessageFlags.Ephemeral 
+                });
+            }
+
             if (interaction.commandName === 'eliminar_caps') {
                 if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins de proyectos.', flags: MessageFlags.Ephemeral });
 
@@ -193,13 +241,11 @@ client.on('interactionCreate', async interaction => {
 
                 const capsAntes = db.proyectos[proyecto].capitulosDisponibles.length;
                 
-                // Filtramos dejando solo los capítulos que NO están en la lista de eliminación
                 db.proyectos[proyecto].capitulosDisponibles = db.proyectos[proyecto].capitulosDisponibles.filter(cap => !capsAEliminar.includes(cap));
                 
                 const eliminadosCount = capsAntes - db.proyectos[proyecto].capitulosDisponibles.length;
 
                 if (eliminadosCount > 0) {
-                    // Restar de las estadísticas asegurando que no queden números negativos
                     db.proyectos[proyecto].stats.clean.libres = Math.max(0, db.proyectos[proyecto].stats.clean.libres - eliminadosCount);
                     db.proyectos[proyecto].stats.tradu.libres = Math.max(0, db.proyectos[proyecto].stats.tradu.libres - eliminadosCount);
                     db.proyectos[proyecto].stats.type.bloqueados = Math.max(0, db.proyectos[proyecto].stats.type.bloqueados - eliminadosCount);
@@ -335,7 +381,7 @@ client.on('interactionCreate', async interaction => {
                     if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo administradores.', flags: MessageFlags.Ephemeral });
                     infoEmbed.setTitle('👑 Guía de Zumito para Administradores')
                         .setColor('#e67e22')
-                        .setDescription('**`/crear_proyecto`** y **`/editar_proyecto`**\n↳ Administra obras, enlaces web, Drive y estética.\n\n**`/agregar_caps`** y **`/eliminar_caps`**\n↳ Controla el stock de capítulos disponibles.\n\n**`/publicar`**\n↳ Envía anuncios públicos como Actualización, Estreno o Finalizado.\n\n**`/reporte`**\n↳ Panel de progreso invisible.');
+                        .setDescription('**`/crear_proyecto`** y **`/editar_proyecto`**\n↳ Administra obras, enlaces web, Drive y estética.\n\n**`/lista_proyectos`**\n↳ Revisa el inventario completo de proyectos en un vistazo.\n\n**`/agregar_caps`** y **`/eliminar_caps`**\n↳ Controla el stock de capítulos disponibles.\n\n**`/publicar`**\n↳ Envía anuncios públicos como Actualización, Estreno o Finalizado.\n\n**`/reporte`**\n↳ Panel de progreso invisible.\n\n**`/reiniciar_reportes`**\n↳ Limpia todas las estadísticas internas de los reportes.');
                 }
                 await interaction.reply({ embeds: [infoEmbed], flags: MessageFlags.Ephemeral });
             }
@@ -584,6 +630,29 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.isButton()) {
+            // NUEVO LÓGICA: Confirmar reinicio de reportes de proyectos
+            if (interaction.customId === 'confirmar_reinicio_reportes') {
+                if (!esAdmin(interaction)) return;
+                const db = leerBaseDeDatos();
+                
+                for (const key in db.proyectos) {
+                    db.proyectos[key].stats = {
+                        clean: { libres: 0, proceso: 0, revisar: 0, aprobados: 0 },
+                        tradu: { libres: 0, proceso: 0, revisar: 0, aprobados: 0 },
+                        type: { bloqueados: 0, libres: 0, proceso: 0, revisar: 0, aprobados: 0 }
+                    };
+                    // Aseguramos limpiar cualquier asignación fantasma de los capítulos disponibles
+                    db.proyectos[key].capitulosDisponibles = [];
+                }
+                db.asignaciones = []; // Limpiamos la vigilancia de asignaciones para evitar problemas
+                guardarBaseDeDatos(db);
+                await interaction.update({ content: '✅ Todos los reportes de proyectos y el stock han sido restablecidos a 0 exitosamente.', components: [] });
+            }
+
+            if (interaction.customId === 'cancelar_reinicio_reportes') {
+                await interaction.update({ content: '❌ Operación cancelada.', components: [] });
+            }
+
             if (interaction.customId === 'confirmar_reinicio_mes') {
                 if (!esAdmin(interaction)) return;
                 const db = leerBaseDeDatos();
