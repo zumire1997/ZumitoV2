@@ -10,7 +10,7 @@ const dbFile = './database.json';
 const pedidosTemp = new Map(); 
 
 // AQUÍ PONES EL ID DEL ROL ADMIN (Esto servirá para que el bot te etiquete en las alertas)
-const rolesPermitidos = ['AQUÍ_PEGA_TU_ID']; 
+const rolesPermitidos = ['1433920133046206515']; 
 
 function esAdmin(interaction) {
     if (interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) return true;
@@ -68,7 +68,7 @@ client.once('clientReady', async () => {
                 description: '[Admin] Crear proyecto', 
                 options: [
                     { name: 'nombre', description: 'El título de la obra', type: ApplicationCommandOptionType.String, required: true },
-                    { name: 'portada', description: 'Sube la imagen de portada', type: ApplicationCommandOptionType.Attachment, required: true },
+                    { name: 'portada', description: 'Link de la imagen de portada (Ej: Imgur)', type: ApplicationCommandOptionType.String, required: true },
                     { name: 'canal', description: 'Canal de Discord vinculado', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildText], required: true },
                     { name: 'enlace_drive', description: 'Link de la carpeta maestra en Google Drive', type: ApplicationCommandOptionType.String, required: true },
                     { name: 'enlace_web', description: 'Link web oficial de lectura (Opcional)', type: ApplicationCommandOptionType.String, required: false },
@@ -82,7 +82,7 @@ client.once('clientReady', async () => {
                 options: [
                     { name: 'proyecto', description: 'Selecciona el proyecto a editar', type: ApplicationCommandOptionType.String, required: true, autocomplete: true },
                     { name: 'nuevo_nombre', description: 'Cambiar el título de la obra', type: ApplicationCommandOptionType.String, required: false },
-                    { name: 'nueva_portada', description: 'Cambiar la imagen de portada', type: ApplicationCommandOptionType.Attachment, required: false },
+                    { name: 'nueva_portada', description: 'Nuevo link de la imagen de portada', type: ApplicationCommandOptionType.String, required: false },
                     { name: 'nuevo_canal', description: 'Cambiar el canal vinculado', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildText], required: false },
                     { name: 'nuevo_enlace_drive', description: 'Cambiar el link de Drive', type: ApplicationCommandOptionType.String, required: false },
                     { name: 'nuevo_enlace_web', description: 'Cambiar el link web de lectura', type: ApplicationCommandOptionType.String, required: false },
@@ -148,7 +148,7 @@ client.once('clientReady', async () => {
 
                 const canal = await client.channels.fetch(asig.canalId).catch(() => null);
                 if (canal) {
-                    const tagAdmin = rolesPermitidos[0] !== 'AQUÍ_PEGA_TU_ID' ? `<@&${rolesPermitidos[0]}>` : 'Admin';
+                    const tagAdmin = rolesPermitidos[0] !== '1433920133046206515' ? `<@&${rolesPermitidos[0]}>` : 'Admin';
                     const alertaVencimiento = new EmbedBuilder()
                         .setColor('#e74c3c')
                         .setTitle('⏰ ¡Plazo Vencido!')
@@ -199,7 +199,7 @@ client.on('interactionCreate', async interaction => {
                     const linkWeb = datos.enlace_web?.startsWith('http') ? `[Web](${datos.enlace_web})` : 'N/A';
                     
                     currentEmbed.addFields({
-                        name: `🔺 ${nombre}`,
+                        name: ` ${nombre}`,
                         value: `**Canal:** <#${datos.canalId}>\n**Drive:** ${linkDrive} | **Web:** ${linkWeb}\n**Stock de capítulos:** ${datos.capitulosDisponibles.length} cap(s)`,
                         inline: true
                     });
@@ -268,7 +268,7 @@ client.on('interactionCreate', async interaction => {
                 }
 
                 const nuevoNombre = interaction.options.getString('nuevo_nombre');
-                const nuevaPortada = interaction.options.getAttachment('nueva_portada');
+                const nuevaPortada = interaction.options.getString('nueva_portada');
                 const nuevoCanal = interaction.options.getChannel('nuevo_canal');
                 const nuevoEnlaceDrive = interaction.options.getString('nuevo_enlace_drive');
                 const nuevoEnlaceWeb = interaction.options.getString('nuevo_enlace_web');
@@ -277,11 +277,11 @@ client.on('interactionCreate', async interaction => {
 
                 let proyectoTarget = db.proyectos[nombreActual];
 
-                if (nuevaPortada) {
-                    if (!nuevaPortada.contentType.startsWith('image/')) {
-                        return interaction.reply({ content: '❌ La nueva portada debe ser una imagen.', flags: MessageFlags.Ephemeral });
+               if (nuevaPortadaUrl) {
+                    if (!nuevaPortadaUrl.startsWith('http')) {
+                        return interaction.reply({ content: '❌ El enlace de la portada debe comenzar con http o https.', flags: MessageFlags.Ephemeral });
                     }
-                    proyectoTarget.imagen = nuevaPortada.url;
+                    proyectoTarget.imagen = nuevaPortadaUrl;
                 }
                 if (nuevoCanal) proyectoTarget.canalId = nuevoCanal.id;
                 if (nuevoEnlaceDrive) proyectoTarget.enlace_drive = nuevoEnlaceDrive;
@@ -333,7 +333,7 @@ client.on('interactionCreate', async interaction => {
                 let mensajeAnuncio = `${mencion}\n`;
                 mensajeAnuncio += `- ˏˋ ✧ **${estado}** ✧ ˎˊ -\n`;
                 mensajeAnuncio += `︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
-                mensajeAnuncio += `🔺 **${nombreProyecto}** 🔺\n`;
+                mensajeAnuncio += `**${nombreProyecto}** \n`;
                 
                 if (etiquetaExtra) {
                     mensajeAnuncio += `${etiquetaExtra}\n`;
@@ -444,16 +444,20 @@ client.on('interactionCreate', async interaction => {
             if (interaction.commandName === 'crear_proyecto') {
                 if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins.', flags: MessageFlags.Ephemeral });
                 const nombreProyecto = interaction.options.getString('nombre');
-                const portada = interaction.options.getAttachment('portada');
+                const portada = interaction.options.getString('portada');
                 const canalVinculado = interaction.options.getChannel('canal'); 
                 const enlaceDrive = interaction.options.getString('enlace_drive'); 
                 const enlaceWeb = interaction.options.getString('enlace_web') || '';
                 const generos = interaction.options.getString('generos') || '';
                 const etiquetaExtra = interaction.options.getString('etiqueta_extra') || '';
 
-                if (!portada.contentType.startsWith('image/')) return interaction.reply({ content: '❌ Sube una imagen válida.', flags: MessageFlags.Ephemeral });
+                if (!portadaUrl.startsWith('http')) return interaction.reply({ content: '❌ Ingresa un enlace válido que comience con http.', flags: MessageFlags.Ephemeral });
+                
                 const db = leerBaseDeDatos();
                 if (db.proyectos[nombreProyecto]) return interaction.reply({ content: '⚠️ Ya existe.', flags: MessageFlags.Ephemeral });
+                
+                db.proyectos[nombreProyecto] = {
+                    imagen: portadaUrl, // Guarda el link
                 
                 db.proyectos[nombreProyecto] = {
                     imagen: portada.url,
