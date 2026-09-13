@@ -264,11 +264,11 @@ client.on('interactionCreate', async interaction => {
                 const db = leerBaseDeDatos();
 
                 if (!db.proyectos[nombreActual]) {
-                    return interaction.reply({ content: '⚠️ Ese proyecto no existe en la base de datos.', flags: MessageFlags.Ephemeral });
+                    return interaction.reply({ content: '⚠️ Proyecto no encontrado en la base de datos.', flags: MessageFlags.Ephemeral });
                 }
 
                 const nuevoNombre = interaction.options.getString('nuevo_nombre');
-                const nuevaPortada = interaction.options.getString('nueva_portada');
+                const nuevaPortadaUrl = interaction.options.getString('nueva_portada'); // <-- Variable corregida
                 const nuevoCanal = interaction.options.getChannel('nuevo_canal');
                 const nuevoEnlaceDrive = interaction.options.getString('nuevo_enlace_drive');
                 const nuevoEnlaceWeb = interaction.options.getString('nuevo_enlace_web');
@@ -277,7 +277,7 @@ client.on('interactionCreate', async interaction => {
 
                 let proyectoTarget = db.proyectos[nombreActual];
 
-               if (nuevaPortadaUrl) {
+                if (nuevaPortadaUrl) {
                     if (!nuevaPortadaUrl.startsWith('http')) {
                         return interaction.reply({ content: '❌ El enlace de la portada debe comenzar con http o https.', flags: MessageFlags.Ephemeral });
                     }
@@ -444,7 +444,7 @@ client.on('interactionCreate', async interaction => {
             if (interaction.commandName === 'crear_proyecto') {
                 if (!esAdmin(interaction)) return interaction.reply({ content: '❌ Solo admins.', flags: MessageFlags.Ephemeral });
                 const nombreProyecto = interaction.options.getString('nombre');
-                const portada = interaction.options.getString('portada');
+                const portadaUrl = interaction.options.getString('portada'); // <-- Variable corregida
                 const canalVinculado = interaction.options.getChannel('canal'); 
                 const enlaceDrive = interaction.options.getString('enlace_drive'); 
                 const enlaceWeb = interaction.options.getString('enlace_web') || '';
@@ -456,11 +456,9 @@ client.on('interactionCreate', async interaction => {
                 const db = leerBaseDeDatos();
                 if (db.proyectos[nombreProyecto]) return interaction.reply({ content: '⚠️ Ya existe.', flags: MessageFlags.Ephemeral });
                 
+                // Sintaxis reparada
                 db.proyectos[nombreProyecto] = {
-                    imagen: portadaUrl, // Guarda el link
-                
-                db.proyectos[nombreProyecto] = {
-                    imagen: portada.url,
+                    imagen: portadaUrl,
                     canalId: canalVinculado.id, 
                     enlace_drive: enlaceDrive, 
                     enlace_web: enlaceWeb,
@@ -473,8 +471,9 @@ client.on('interactionCreate', async interaction => {
                         type: { bloqueados: 0, libres: 0, proceso: 0, revisar: 0, aprobados: 0 }
                     }
                 };
+                
                 guardarBaseDeDatos(db);
-                const exitoEmbed = new EmbedBuilder().setColor('#e67e22').setTitle('📚 ¡Nuevo Proyecto!').setDescription(`Se creó **${nombreProyecto}** vinculado a <#${canalVinculado.id}>.`).setImage(portada.url);
+                const exitoEmbed = new EmbedBuilder().setColor('#e67e22').setTitle('📚 ¡Nuevo Proyecto!').setDescription(`Se creó **${nombreProyecto}** vinculado a <#${canalVinculado.id}>.`).setImage(portadaUrl);
                 await interaction.reply({ embeds: [exitoEmbed] });
             }
 
