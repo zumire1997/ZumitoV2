@@ -127,7 +127,8 @@ client.once('clientReady', async () => {
                     { name: 'capitulos', description: 'Número de capítulo(s) (Ej: 02, o 15 al 17)', type: ApplicationCommandOptionType.String, required: true },
                     { name: 'canal', description: '¿Dónde se anuncia?', type: ApplicationCommandOptionType.Channel, channelTypes: [ChannelType.GuildText], required: true },
                     { name: 'enlace_alternativo', description: 'Usa un link distinto al guardado (Opcional)', type: ApplicationCommandOptionType.String, required: false },
-                    { name: 'mencion', description: '¿A quién etiquetar?', type: ApplicationCommandOptionType.String, required: false, choices: [{name: '@everyone', value: '@everyone'}, {name: '@here', value: '@here'}, {name: 'Sin mención', value: ''}] }
+                    { name: 'enlaces_extra', description: 'Más links de lectura (TMO, VisorJPG, etc)', type: ApplicationCommandOptionType.String, required: false },
+                    { name: 'mencion', description: 'Escribe los roles a etiquetar (Ej: @MANHWA @TODOS)', type: ApplicationCommandOptionType.String, required: false }
                 ]
             }
         ]});
@@ -322,8 +323,9 @@ client.on('interactionCreate', async interaction => {
                 const estado = interaction.options.getString('estado'); 
                 const capitulos = interaction.options.getString('capitulos');
                 const enlaceAlternativo = interaction.options.getString('enlace_alternativo');
+                const enlacesExtra = interaction.options.getString('enlaces_extra'); // <-- Nuevo
                 const canalDestino = interaction.options.getChannel('canal');
-                const mencion = interaction.options.getString('mencion') || '';
+                const mencion = interaction.options.getString('mencion') || ''; // <-- Ahora es texto libre
 
                 const enlaceFinal = enlaceAlternativo || proyInfo.enlace_web || 'Enlace no configurado';
                 const generos = proyInfo.generos;
@@ -331,8 +333,8 @@ client.on('interactionCreate', async interaction => {
                 const imagenUrl = proyInfo.imagen;
 
                 let mensajeAnuncio = `${mencion}\n`;
-                mensajeAnuncio += `- ˏˋ ✧ **${estado}** ✧ ˎˊ -\n`;
-                mensajeAnuncio += `︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
+                mensajeAnuncio += `\\- ˏˋ ✧ **${estado}** ✧ ˎˊ -\n`;
+                mensajeAnuncio += `︶︶︶︶︶︶︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
                 mensajeAnuncio += `**${nombreProyecto}** \n`;
                 
                 if (etiquetaExtra) {
@@ -345,13 +347,23 @@ client.on('interactionCreate', async interaction => {
                 }
                 
                 mensajeAnuncio += `✦ Capítulo(s): ${capitulos}\n\n`;
-                mensajeAnuncio += `➤ Disponible en: ${enlaceFinal}\n\n`;
+                mensajeAnuncio += `➤ Disponible en: ${enlaceFinal}\n`;
+                
+                // Agregamos los enlaces extra si escribiste alguno
+                if (enlacesExtra) {
+                    mensajeAnuncio += `➤ Otros sitios: ${enlacesExtra}\n`;
+                }
+                mensajeAnuncio += `\n`;
+
                 mensajeAnuncio += `✧˖°. Hecho con mucho amorcito~\n`;
                 mensajeAnuncio += `.✧ No olviden dejar su reacción ♡`;
 
                 const imagenEmbed = new EmbedBuilder()
-                    .setColor('#2b2d31')
-                    .setImage(imagenUrl);
+                    .setColor('#2b2d31');
+
+                if (imagenUrl && imagenUrl.startsWith('http')) {
+                    imagenEmbed.setImage(imagenUrl);
+                }
 
                 try {
                     await canalDestino.send({ content: mensajeAnuncio, embeds: [imagenEmbed] });
