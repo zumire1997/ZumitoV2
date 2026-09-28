@@ -334,7 +334,7 @@ client.on('interactionCreate', async interaction => {
 
                 let mensajeAnuncio = '';
                 mensajeAnuncio += `\\- ˏˋ ✧ **${estado}** ✧ ˎˊ -\n`;
-                mensajeAnuncio += `︶︶︶︶︶︶︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
+                mensajeAnuncio += `︶︶︶︶︶︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
                 mensajeAnuncio += `**${nombreProyecto}** \n`;
                 
                 if (etiquetaExtra) {
