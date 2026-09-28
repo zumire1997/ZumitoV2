@@ -332,7 +332,7 @@ client.on('interactionCreate', async interaction => {
                 const etiquetaExtra = proyInfo.etiqueta_extra;
                 const imagenUrl = proyInfo.imagen;
 
-                let mensajeAnuncio = `${mencion}\n`;
+                let mensajeAnuncio = '';
                 mensajeAnuncio += `\\- ˏˋ ✧ **${estado}** ✧ ˎˊ -\n`;
                 mensajeAnuncio += `︶︶︶︶︶︶︶︶︶︶︶︶︶︶ # Zumi Scan\n\n`;
                 mensajeAnuncio += `**${nombreProyecto}** \n`;
@@ -354,6 +354,11 @@ client.on('interactionCreate', async interaction => {
                     mensajeAnuncio += `➤ Otros sitios: ${enlacesExtra}\n`;
                 }
                 mensajeAnuncio += `\n`;
+
+                // AQUÍ VAN LAS MENCIONES ANTES DE LA DESPEDIDA
+                if (mencion) {
+                    mensajeAnuncio += `${mencion}\n\n`;
+                }
 
                 mensajeAnuncio += `✧˖°. Hecho con mucho amorcito~\n`;
                 mensajeAnuncio += `.✧ No olviden dejar su reacción ♡`;
