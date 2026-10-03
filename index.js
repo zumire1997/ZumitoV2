@@ -5,6 +5,9 @@ import {
     MessageFlags, ChannelType, StringSelectMenuOptionBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
 } from 'discord.js';
 import fs from 'fs';
+import { initializeApp, cert, applicationDefault, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 const dbFile = './database.json';
 const pedidosTemp = new Map(); 
@@ -44,6 +47,261 @@ function leerBaseDeDatos() {
 
 function guardarBaseDeDatos(datos) { fs.writeFileSync(dbFile, JSON.stringify(datos, null, 4)); }
 
+// ============================================================
+// PROMOCIÓN: 250 LUX POR RECLAMAR EN DISCORD (MÁXIMO 20)
+// ============================================================
+const PROMO_LUX = {
+    id: 'primeros20_registro_discord_2026',
+    limite: 20,
+    recompensaDiscord: 250,
+    // Opcional: si defines PROMO_START_ISO en .env, solo cuentan cuentas creadas desde ese momento.
+    inicioIso: process.env.PROMO_START_ISO || null,
+    // Opcional: UIDs separados por coma para excluir tu cuenta admin o cuentas de prueba.
+    excluidos: new Set((process.env.PROMO_EXCLUDED_UIDS || '').split(',').map(x => x.trim()).filter(Boolean))
+};
+
+let firebaseAdmin = null;
+let cachePrimeros20 = { usuarios: null, creadoEn: 0 };
+
+function iniciarFirebaseAdmin() {
+    if (firebaseAdmin) return firebaseAdmin;
+
+    let app;
+    const appExistente = getApps()[0];
+    if (appExistente) {
+        app = appExistente;
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+        // Algunos hosts guardan los saltos de línea de la clave como "\\n".
+        if (serviceAccount.private_key) {
+            serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+        }
+        app = initializeApp({ credential: cert(serviceAccount) });
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        app = initializeApp({
+            credential: applicationDefault(),
+            projectId: process.env.FIREBASE_PROJECT_ID || 'zumi-scan'
+        });
+    } else {
+        throw new Error(
+            'Falta configurar Firebase Admin. Define FIREBASE_SERVICE_ACCOUNT_JSON o GOOGLE_APPLICATION_CREDENTIALS.'
+        );
+    }
+
+    firebaseAdmin = {
+        auth: getAuth(app),
+        firestore: getFirestore(app)
+    };
+    return firebaseAdmin;
+}
+
+function normalizarTexto(valor) {
+    return String(valor || '')
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+async function listarUsuariosAuth(auth) {
+    const usuarios = [];
+    let pageToken;
+    do {
+        const page = await auth.listUsers(1000, pageToken);
+        usuarios.push(...page.users);
+        pageToken = page.pageToken;
+    } while (pageToken);
+    return usuarios;
+}
+
+async function obtenerPrimeros20Usuarios(auth) {
+    const ahora = Date.now();
+    // Cache corto para no listar Firebase Auth en cada uso seguido del comando.
+    if (cachePrimeros20.usuarios && ahora - cachePrimeros20.creadoEn < 5 * 60 * 1000) {
+        return cachePrimeros20.usuarios;
+    }
+
+    let usuarios = await listarUsuariosAuth(auth);
+
+    if (PROMO_LUX.inicioIso) {
+        const inicio = Date.parse(PROMO_LUX.inicioIso);
+        if (!Number.isNaN(inicio)) {
+            usuarios = usuarios.filter(u => {
+                const creado = Date.parse(u.metadata?.creationTime || '');
+                return !Number.isNaN(creado) && creado >= inicio;
+            });
+        }
+    }
+
+    if (PROMO_LUX.excluidos.size > 0) {
+        usuarios = usuarios.filter(u => !PROMO_LUX.excluidos.has(u.uid));
+    }
+
+    usuarios.sort((a, b) => {
+        const ta = Date.parse(a.metadata?.creationTime || '') || Number.MAX_SAFE_INTEGER;
+        const tb = Date.parse(b.metadata?.creationTime || '') || Number.MAX_SAFE_INTEGER;
+        return ta - tb;
+    });
+
+    const primeros = usuarios.slice(0, PROMO_LUX.limite);
+    cachePrimeros20 = { usuarios: primeros, creadoEn: ahora };
+    return primeros;
+}
+
+async function buscarUsuarioWeb(auth, firestore, textoIngresado) {
+    const buscado = String(textoIngresado || '').trim();
+    if (!buscado) return null;
+
+    // UID exacto.
+    try {
+        return await auth.getUser(buscado);
+    } catch (_) {}
+
+    // Correo exacto (también aceptado en el campo "usuario" por seguridad).
+    if (buscado.includes('@')) {
+        try {
+            return await auth.getUserByEmail(buscado);
+        } catch (_) {}
+    }
+
+    // Si la web guarda un nombre de usuario en Firestore, lo buscamos aquí.
+    // Se admiten varios nombres de campo para que funcione con perfiles antiguos.
+    const camposPosibles = ['usuario', 'username', 'nombre', 'displayName'];
+    for (const campo of camposPosibles) {
+        try {
+            const snap = await firestore.collection('usuarios').where(campo, '==', buscado).limit(2).get();
+            if (snap.size === 1) {
+                return await auth.getUser(snap.docs[0].id);
+            }
+            if (snap.size > 1) {
+                throw new Error('USUARIO_AMBIGUO');
+            }
+        } catch (error) {
+            if (error.message === 'USUARIO_AMBIGUO') throw error;
+        }
+    }
+
+    // Último intento: nombre visible de Firebase/Google, sin distinguir mayúsculas ni acentos.
+    const todos = await listarUsuariosAuth(auth);
+    const objetivo = normalizarTexto(buscado);
+    const coincidencias = todos.filter(u => normalizarTexto(u.displayName) === objetivo);
+
+    if (coincidencias.length === 1) return coincidencias[0];
+    if (coincidencias.length > 1) throw new Error('USUARIO_AMBIGUO');
+
+    return null;
+}
+
+async function reclamarPromoDiscord({ discordUser, usuarioWeb }) {
+    const { auth, firestore } = iniciarFirebaseAdmin();
+
+    const usuarioFirebase = await buscarUsuarioWeb(auth, firestore, usuarioWeb);
+    if (!usuarioFirebase) {
+        const error = new Error('No encontré ese usuario en Zumi Scan.');
+        error.code = 'USUARIO_NO_ENCONTRADO';
+        throw error;
+    }
+
+    const primeros20 = await obtenerPrimeros20Usuarios(auth);
+    const posicion = primeros20.findIndex(u => u.uid === usuarioFirebase.uid);
+    if (posicion === -1) {
+        const error = new Error('Ese usuario no está entre las primeras 20 cuentas registradas en la página.');
+        error.code = 'NO_ELEGIBLE';
+        throw error;
+    }
+
+    const promoRef = firestore.collection('promociones').doc(PROMO_LUX.id);
+    const userRef = firestore.collection('usuarios').doc(usuarioFirebase.uid);
+    const claimWebRef = firestore.collection('promo_lux_reclamos_web').doc(usuarioFirebase.uid);
+    const claimDiscordRef = firestore.collection('promo_lux_reclamos_discord').doc(discordUser.id);
+
+    const resultado = await firestore.runTransaction(async transaction => {
+        const [promoSnap, userSnap, claimWebSnap, claimDiscordSnap] = await Promise.all([
+            transaction.get(promoRef),
+            transaction.get(userRef),
+            transaction.get(claimWebRef),
+            transaction.get(claimDiscordRef)
+        ]);
+
+        const promo = promoSnap.exists ? promoSnap.data() : {};
+        const reclamados = Number(promo.reclamados || 0);
+        const activa = promo.activa !== false;
+
+        if (!activa) {
+            const error = new Error('La promoción ya está cerrada.');
+            error.code = 'PROMO_CERRADA';
+            throw error;
+        }
+        if (reclamados >= PROMO_LUX.limite) {
+            const error = new Error('Ya se completaron las 20 reclamaciones disponibles.');
+            error.code = 'PROMO_AGOTADA';
+            throw error;
+        }
+        if (claimDiscordSnap.exists) {
+            const error = new Error('Esta cuenta de Discord ya reclamó la promoción.');
+            error.code = 'DISCORD_YA_RECLAMO';
+            throw error;
+        }
+        if (claimWebSnap.exists) {
+            const error = new Error('Ese usuario de Zumi Scan ya reclamó la promoción en Discord.');
+            error.code = 'WEB_YA_RECLAMO';
+            throw error;
+        }
+        if (!userSnap.exists) {
+            const error = new Error('La cuenta existe en Firebase Auth, pero todavía no tiene perfil en usuarios/. Inicia sesión una vez en la web y vuelve a intentar.');
+            error.code = 'SIN_PERFIL_WEB';
+            throw error;
+        }
+
+        const dataUsuario = userSnap.data() || {};
+        const monedasAntes = Number(dataUsuario.monedas || 0);
+        const monedasDespues = monedasAntes + PROMO_LUX.recompensaDiscord;
+        const ahora = new Date();
+
+        transaction.update(userRef, {
+            monedas: monedasDespues
+        });
+
+        transaction.set(claimWebRef, {
+            firebaseUid: usuarioFirebase.uid,
+            usuarioIngresado: usuarioWeb,
+            displayName: usuarioFirebase.displayName || null,
+            discordId: discordUser.id,
+            discordTag: discordUser.tag || discordUser.username,
+            recompensa: PROMO_LUX.recompensaDiscord,
+            posicionRegistro: posicion + 1,
+            reclamadoEn: ahora
+        });
+
+        transaction.set(claimDiscordRef, {
+            discordId: discordUser.id,
+            firebaseUid: usuarioFirebase.uid,
+            recompensa: PROMO_LUX.recompensaDiscord,
+            reclamadoEn: ahora
+        });
+
+        transaction.set(promoRef, {
+            activa: reclamados + 1 < PROMO_LUX.limite,
+            limite: PROMO_LUX.limite,
+            recompensaDiscord: PROMO_LUX.recompensaDiscord,
+            inicioIso: PROMO_LUX.inicioIso,
+            reclamados: reclamados + 1,
+            actualizadoEn: ahora
+        }, { merge: true });
+
+        return {
+            posicionRegistro: posicion + 1,
+            reclamacionNumero: reclamados + 1,
+            restantes: Math.max(0, PROMO_LUX.limite - (reclamados + 1)),
+            monedasAntes,
+            monedasDespues,
+            usuarioFirebase
+        };
+    });
+
+    return resultado;
+}
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 client.once('clientReady', async () => {
@@ -53,6 +311,18 @@ client.once('clientReady', async () => {
     try {
         await rest.put(Routes.applicationCommands(client.user.id), { body: [
             { name: 'perfil', description: 'Mira tu perfil y puntos acumulados' },
+            {
+                name: 'reclamar',
+                description: 'Reclama 250 Lux de la promo de los primeros 20 usuarios',
+                options: [
+                    {
+                        name: 'usuario',
+                        description: 'Tu usuario exacto de Zumi Scan (también acepta el correo registrado)',
+                        type: ApplicationCommandOptionType.String,
+                        required: true
+                    }
+                ]
+            },
             { 
                 name: 'registrar', 
                 description: 'Envía una solicitud de capítulos terminados', 
@@ -178,6 +448,49 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (interaction.isChatInputCommand()) {
+
+            // PROMOCIÓN: /reclamar usuario:<usuario de Zumi Scan>
+            if (interaction.commandName === 'reclamar') {
+                const usuarioWeb = interaction.options.getString('usuario', true);
+                await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+                try {
+                    const resultado = await reclamarPromoDiscord({
+                        discordUser: interaction.user,
+                        usuarioWeb
+                    });
+
+                    const embed = new EmbedBuilder()
+                        .setColor('#9b59b6')
+                        .setTitle('🍇 ¡250 Lux reclamados!')
+                        .setDescription(
+                            `Tu cuenta web **${resultado.usuarioFirebase.displayName || usuarioWeb}** estaba entre las primeras 20 registradas.\n\n` +
+                            `✨ **+${PROMO_LUX.recompensaDiscord} Lux**\n` +
+                            `💰 Saldo: **${resultado.monedasAntes} → ${resultado.monedasDespues} Lux**\n` +
+                            `🏁 Reclamación **#${resultado.reclamacionNumero}/${PROMO_LUX.limite}**\n` +
+                            `🎟️ Quedan **${resultado.restantes}** cupos.`
+                        )
+                        .setFooter({ text: 'Esta promoción solo puede reclamarse una vez por cuenta web y una vez por cuenta de Discord.' });
+
+                    await interaction.editReply({ embeds: [embed] });
+                } catch (error) {
+                    console.error('Error en /reclamar:', error);
+
+                    let mensaje = '❌ No pude procesar la reclamación.';
+                    if (error.code === 'USUARIO_NO_ENCONTRADO') mensaje = '❌ No encontré ese usuario en Zumi Scan. Revisa que esté escrito exactamente como en la página.';
+                    else if (error.message === 'USUARIO_AMBIGUO') mensaje = '⚠️ Hay más de una cuenta con ese nombre. Vuelve a usar `/reclamar` y en **usuario** escribe el correo con el que te registraste en Zumi Scan.';
+                    else if (error.code === 'NO_ELEGIBLE') mensaje = '💜 La cuenta existe, pero no está entre las **primeras 20** registradas en Zumi Scan, así que no puede reclamar esta promoción.';
+                    else if (error.code === 'PROMO_AGOTADA') mensaje = '🏁 La promoción terminó: ya se completaron las **20 reclamaciones**.';
+                    else if (error.code === 'PROMO_CERRADA') mensaje = '🏁 La promoción ya está cerrada.';
+                    else if (error.code === 'DISCORD_YA_RECLAMO') mensaje = '⚠️ Esta cuenta de Discord ya reclamó los 250 Lux de la promoción.';
+                    else if (error.code === 'WEB_YA_RECLAMO') mensaje = '⚠️ Ese usuario de Zumi Scan ya recibió los 250 Lux de Discord.';
+                    else if (error.code === 'SIN_PERFIL_WEB') mensaje = '⚠️ Encontré la cuenta, pero todavía no existe su perfil de Zumi Scan en Firestore. Inicia sesión una vez en la página y vuelve a intentarlo.';
+                    else if (String(error.message || '').includes('Falta configurar Firebase Admin')) mensaje = '⚙️ Zumito todavía no tiene configurada la conexión privada con Firebase. Avísale a un administrador.';
+
+                    await interaction.editReply({ content: mensaje });
+                }
+                return;
+            }
             
             // NUEVO COMANDO: Lista de proyectos
             if (interaction.commandName === 'lista_proyectos') {
